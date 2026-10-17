@@ -1,0 +1,627 @@
+--[[
+================================================================
+   FLICKER REVEAL  ·  MOBILE BUILD
+   Works on Delta, Arceus X, Fluxus, Codex, Hydrogen, Solara,
+   Krnl, and anything else that runs plain Luau.
+   Toggle panel : tap the  FR  button (top-left)
+   Drag panel   : drag the title bar
+================================================================
+]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LP   = Players.LocalPlayer
+local PGui = LP:WaitForChild("PlayerGui")
+
+-- mobile detection + options
+local IS_MOBILE = UserInputService.TouchEnabled
+local ESP_ON    = true   -- set false on a low-end phone if it lags
+
+------------------------------------------------------------------
+-- cleanup
+------------------------------------------------------------------
+for _, o in ipairs(PGui:GetChildren()) do
+	if o.Name == "FlickerReveal" then o:Destroy() end
+end
+for _, p in ipairs(Players:GetPlayers()) do
+	local c = p.Character
+	if c then
+		local hl = c:FindFirstChild("FlickerHL"); if hl then hl:Destroy() end
+		local hd = c:FindFirstChild("Head")
+		local bb = hd and hd:FindFirstChild("FlickerBB"); if bb then bb:Destroy() end
+	end
+end
+
+------------------------------------------------------------------
+-- config
+------------------------------------------------------------------
+local EVIL = { murderer=true, assassin=true, witch=true, scout=true, ["dark psychic"]=true }
+local NEUT = { clown=true, survivor=true, ["pumpkin man"]=true }
+
+local ROLE_WORDS = {
+	"dark psychic", "muffin man", "pumpkin man", "murderer", "assassin",
+	"detective", "survivor", "innocent", "savior", "psychic", "medic",
+	"witch", "scout", "clown", "twin", "spy",
+}
+
+local C = {
+	bg     = Color3.fromRGB(15, 15, 21),
+	panel  = Color3.fromRGB(25, 25, 33),
+	row    = Color3.fromRGB(33, 33, 43),
+	accent = Color3.fromRGB(255, 214, 102),
+	good   = Color3.fromRGB(110, 232, 150),
+	bad    = Color3.fromRGB(255, 108, 108),
+	neut   = Color3.fromRGB(158, 178, 255),
+	dim    = Color3.fromRGB(148, 148, 164),
+	text   = Color3.fromRGB(236, 236, 246),
+}
+
+local S = { open = true, roles = {}, rows = {}, log = {}, remotes = 0 }
+local logDirty = false
+
+------------------------------------------------------------------
+-- helpers
+------------------------------------------------------------------
+local function nm(x)
+	if type(x) == "string" then return x end
+	local ok, n = pcall(function() return x.Name end)
+	if ok and type(n) == "string" then return n end
+	return tostring(x)
+end
+
+local function matchRole(txt)
+	if type(txt) ~= "string" then return nil end
+	local low = string.lower(txt)
+	for _, w in ipairs(ROLE_WORDS) do
+		if string.find(low, w, 1, true) then return w end
+	end
+	return nil
+end
+
+local function roleColor(r)
+	if not r then return C.dim end
+	if EVIL[r] then return C.bad end
+	if NEUT[r] then return C.neut end
+	return C.good
+end
+
+local function aliases(p)
+	local a = { p.Name, p.DisplayName }
+	local c = p.Character
+	if c then
+		table.insert(a, c.Name)
+		local h = c:FindFirstChildOfClass("Humanoid")
+		if h then table.insert(a, h.DisplayName) end
+	end
+	return a
+end
+
+local function bindByName(text, role)
+	if not role then return false end
+	local hit = false
+	for _, p in ipairs(Players:GetPlayers()) do
+		for _, a in ipairs(aliases(p)) do
+			if a ~= "" and string.find(text, a, 1, true) then
+				S.roles[p.UserId] = role
+				hit = true
+				break
+			end
+		end
+	end
+	return hit
+end
+
+local function corner(o, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 6)
+	c.Parent = o
+	return c
+end
+
+------------------------------------------------------------------
+-- GUI
+------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "FlickerReveal"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 999
+gui.Parent = PGui
+
+local BTN = IS_MOBILE and 58 or 46
+
+local toggle = Instance.new("TextButton")
+toggle.Size = UDim2.fromOffset(BTN, BTN)
+toggle.Position = UDim2.new(0, 12, 0.5, -math.floor(BTN / 2))
+toggle.BackgroundColor3 = C.bg
+toggle.TextColor3 = C.accent
+toggle.Font = Enum.Font.GothamBold
+toggle.TextSize = IS_MOBILE and 20 or 17
+toggle.Text = "FR"
+toggle.BorderSizePixel = 0
+toggle.AutoButtonColor = false
+toggle.Parent = gui
+corner(toggle, 12)
+local tstroke = Instance.new("UIStroke")
+tstroke.Color = C.accent; tstroke.Transparency = 0.4; tstroke.Thickness = 2
+tstroke.Parent = toggle
+
+local main = Instance.new("Frame")
+main.BackgroundColor3 = C.bg
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+corner(main, 12)
+
+local TITLE_H = IS_MOBILE and 40 or 34
+
+local title = Instance.new("Frame")
+title.Size = UDim2.new(1, 0, 0, TITLE_H)
+title.BackgroundColor3 = C.panel
+title.BorderSizePixel = 0
+title.Parent = main
+corner(title, 12)
+
+local tl = Instance.new("TextLabel")
+tl.BackgroundTransparency = 1
+tl.Size = UDim2.new(1, -80, 1, 0)
+tl.Position = UDim2.fromOffset(12, 0)
+tl.Font = Enum.Font.GothamBold
+tl.TextSize = IS_MOBILE and 14 or 13
+tl.TextColor3 = C.accent
+tl.TextXAlignment = Enum.TextXAlignment.Left
+tl.Text = "FLICKER REVEAL"
+tl.Parent = title
+
+local closeBtn = Instance.new("TextButton")
+local CB = IS_MOBILE and 30 or 24
+closeBtn.Size = UDim2.fromOffset(CB, CB)
+closeBtn.Position = UDim2.new(1, -(CB + 8), 0, math.floor((TITLE_H - CB) / 2))
+closeBtn.BackgroundColor3 = C.row
+closeBtn.TextColor3 = C.text
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = IS_MOBILE and 16 or 14
+closeBtn.Text = "X"
+closeBtn.BorderSizePixel = 0
+closeBtn.Parent = title
+corner(closeBtn, 8)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -20, 0, 18)
+status.Position = UDim2.fromOffset(10, TITLE_H + 4)
+status.BackgroundTransparency = 1
+status.Font = Enum.Font.Gotham
+status.TextSize = IS_MOBILE and 12 or 11
+status.TextColor3 = C.dim
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Text = "booting..."
+status.Parent = main
+
+local LIST_TOP = TITLE_H + 26
+
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.new(1, -20, 1, -(LIST_TOP + 92))
+list.Position = UDim2.fromOffset(10, LIST_TOP)
+list.BackgroundColor3 = C.panel
+list.BorderSizePixel = 0
+list.ScrollBarThickness = IS_MOBILE and 6 or 4
+list.ScrollBarImageColor3 = C.accent
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new(0, 0, 0, 0)
+list.Parent = main
+corner(list, 8)
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 4)
+layout.Parent = list
+
+local lpad = Instance.new("UIPadding")
+lpad.PaddingTop = UDim.new(0, 6); lpad.PaddingLeft = UDim.new(0, 6)
+lpad.PaddingRight = UDim.new(0, 6); lpad.PaddingBottom = UDim.new(0, 6)
+lpad.Parent = list
+
+local LOG_H = IS_MOBILE and 66 or 78
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Size = UDim2.new(1, -20, 0, LOG_H)
+logFrame.Position = UDim2.new(0, 10, 1, -(LOG_H + 10))
+logFrame.BackgroundColor3 = C.panel
+logFrame.BorderSizePixel = 0
+logFrame.ScrollBarThickness = IS_MOBILE and 6 or 4
+logFrame.ScrollBarImageColor3 = C.accent
+logFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.Parent = main
+corner(logFrame, 8)
+
+local ll = Instance.new("UIListLayout"); ll.Padding = UDim.new(0, 2); ll.Parent = logFrame
+local lpd = Instance.new("UIPadding")
+lpd.PaddingTop = UDim.new(0, 4); lpd.PaddingLeft = UDim.new(0, 6)
+lpd.PaddingRight = UDim.new(0, 4); lpd.PaddingBottom = UDim.new(0, 4)
+lpd.Parent = logFrame
+
+------------------------------------------------------------------
+-- responsive layout  (rebuilds on rotate / resize)
+------------------------------------------------------------------
+local function applyLayout()
+	local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+		or Vector2.new(1280, 720)
+	local w, h
+	if IS_MOBILE then
+		w = math.clamp(math.floor(vp.X * 0.44), 200, 330)
+		h = math.clamp(math.floor(vp.Y * 0.88), 200, 520)
+		main.Position = UDim2.fromOffset(10, math.floor((vp.Y - h) / 2))
+	else
+		w, h = 330, 470
+		main.Position = UDim2.new(0, 12, 0.5, -235)
+	end
+	main.Size = UDim2.fromOffset(w, h)
+	closeBtn.Position = UDim2.new(1, -(CB + 8), 0, math.floor((TITLE_H - CB) / 2))
+end
+
+applyLayout()
+pcall(function()
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyLayout)
+end)
+
+------------------------------------------------------------------
+-- rows
+------------------------------------------------------------------
+local ROW_H = IS_MOBILE and 42 or 44
+
+local function makeRow(p)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, -2, 0, ROW_H)
+	row.BackgroundColor3 = C.row
+	row.BorderSizePixel = 0
+	row.Parent = list
+	corner(row, 7)
+
+	local dn = Instance.new("TextLabel")
+	dn.BackgroundTransparency = 1
+	dn.Size = UDim2.new(1, -76, 0, 19)
+	dn.Position = UDim2.fromOffset(9, 4)
+	dn.Font = Enum.Font.GothamBold
+	dn.TextSize = IS_MOBILE and 12 or 13
+	dn.TextColor3 = C.text
+	dn.TextXAlignment = Enum.TextXAlignment.Left
+	dn.TextTruncate = Enum.TextTruncate.AtEnd
+	dn.Text = p.DisplayName
+	dn.Parent = row
+
+	local un = Instance.new("TextLabel")
+	un.BackgroundTransparency = 1
+	un.Size = UDim2.new(1, -76, 0, 15)
+	un.Position = UDim2.fromOffset(9, 23)
+	un.Font = Enum.Font.Gotham
+	un.TextSize = IS_MOBILE and 11 or 11
+	un.TextColor3 = C.dim
+	un.TextXAlignment = Enum.TextXAlignment.Left
+	un.Text = "@" .. p.Name
+	un.Parent = row
+
+	local rb = Instance.new("TextLabel")
+	rb.BackgroundTransparency = 1
+	rb.Size = UDim2.new(0, 66, 1, 0)
+	rb.Position = UDim2.new(1, -70, 0, 0)
+	rb.Font = Enum.Font.GothamBold
+	rb.TextSize = IS_MOBILE and 10 or 11
+	rb.TextColor3 = C.dim
+	rb.TextWrapped = true
+	rb.Text = "..."
+	rb.Parent = row
+
+	return { row = row, dn = dn, un = un, rb = rb }
+end
+
+------------------------------------------------------------------
+-- remote log
+------------------------------------------------------------------
+local function pushLog(text, hot)
+	table.insert(S.log, 1, { text = text, hot = hot })
+	while #S.log > 80 do table.remove(S.log) end
+	logDirty = true
+end
+
+local function renderLog()
+	for _, ch in ipairs(logFrame:GetChildren()) do
+		if ch:IsA("TextLabel") then ch:Destroy() end
+	end
+	for i = 1, math.min(#S.log, 40) do
+		local e = S.log[i]
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(1, -4, 0, 14)
+		l.BackgroundTransparency = 1
+		l.Font = Enum.Font.Code
+		l.TextSize = IS_MOBILE and 10 or 11
+		l.TextColor3 = e.hot and C.accent or C.dim
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextTruncate = Enum.TextTruncate.AtEnd
+		l.Text = e.text
+		l.Parent = logFrame
+	end
+end
+
+------------------------------------------------------------------
+-- remote hooking
+------------------------------------------------------------------
+local function ingestTable(t, depth)
+	if depth > 2 or type(t) ~= "table" then return end
+	for k, v in pairs(t) do
+		local ks, vs = nm(k), nm(v)
+		local role = matchRole(ks) or matchRole(vs)
+		if role then
+			for _, p in ipairs(Players:GetPlayers()) do
+				for _, a in ipairs(aliases(p)) do
+					if a ~= "" and (ks == a or vs == a
+						or string.find(ks, a, 1, true) or string.find(vs, a, 1, true)) then
+						S.roles[p.UserId] = role
+					end
+				end
+			end
+		end
+		if type(v) == "table" then ingestTable(v, depth + 1) end
+	end
+end
+
+local function handleArgs(name, ...)
+	local args = { ... }
+	local strs, role = {}, nil
+	for _, a in ipairs(args) do
+		local s = nm(a)
+		table.insert(strs, s)
+		local r = matchRole(s)
+		if r then role = r end
+		if type(a) == "table" then
+			ingestTable(a, 0)
+			for kk, vv in pairs(a) do
+				local r2 = matchRole(nm(kk)) or matchRole(nm(vv))
+				if r2 then role = r2 end
+			end
+		end
+	end
+	local line = name .. "  " .. table.concat(strs, " | ")
+	if #line > 130 then line = string.sub(line, 1, 130) .. "..." end
+	pushLog(line, role ~= nil)
+	if role then bindByName(line, role) end
+end
+
+local hooked = {}
+local function hookRemote(r)
+	if hooked[r] then return end
+	hooked[r] = true
+	S.remotes += 1
+	if r:IsA("RemoteEvent") then
+		pcall(function()
+			r.OnClientEvent:Connect(function(...) handleArgs(r.Name, ...) end)
+		end)
+	end
+end
+
+for _, d in ipairs(game:GetDescendants()) do
+	if d:IsA("RemoteEvent") then hookRemote(d) end
+end
+game.DescendantAdded:Connect(function(d)
+	if d:IsA("RemoteEvent") then hookRemote(d) end
+end)
+
+------------------------------------------------------------------
+-- chat + GUI reveal capture
+------------------------------------------------------------------
+local function handleChat(text)
+	if type(text) ~= "string" then return end
+	local role = matchRole(text)
+	if not role then return end
+	if bindByName(text, role) then
+		pushLog("[chat] " .. text, true)
+	end
+end
+
+pcall(function()
+	game:GetService("TextChatService").MessageReceived:Connect(function(m)
+		handleChat(m.Text)
+	end)
+end)
+
+pcall(function()
+	local ev = game:GetService("ReplicatedStorage"):FindFirstChild("DefaultChatSystemChatEvents")
+	if ev and ev:FindFirstChild("OnMessageDoneFiltering") then
+		ev.OnMessageDoneFiltering.OnClientEvent:Connect(function(d)
+			if d and d.Message then handleChat(d.Message) end
+		end)
+	end
+end)
+
+for _, p in ipairs(Players:GetPlayers()) do
+	pcall(function() p.Chatted:Connect(handleChat) end)
+end
+Players.PlayerAdded:Connect(function(p)
+	pcall(function() p.Chatted:Connect(handleChat) end)
+end)
+
+local function scanGuiForReveals()
+	local budget = 0
+	for _, d in ipairs(PGui:GetDescendants()) do
+		budget += 1
+		if budget > 800 then break end
+		if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text then
+			local t = d.Text
+			if #t > 2 and #t < 160 then
+				local r = matchRole(t)
+				if r then bindByName(t, r) end
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- visual updates
+------------------------------------------------------------------
+local function update()
+	local alive = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		alive[p.UserId] = true
+		local r = S.rows[p.UserId]
+		if not r then
+			r = makeRow(p)
+			S.rows[p.UserId] = r
+		end
+		r.dn.Text = p.DisplayName
+		r.un.Text = "@" .. p.Name
+		local role = S.roles[p.UserId]
+		if role then
+			r.rb.Text = string.upper(role)
+			r.rb.TextColor3 = roleColor(role)
+		else
+			r.rb.Text = "..."
+			r.rb.TextColor3 = C.dim
+		end
+		local c = p.Character
+		local h = c and c:FindFirstChildOfClass("Humanoid")
+		if not h or h.Health <= 0 then
+			r.dn.TextColor3 = C.dim
+			r.un.TextColor3 = Color3.fromRGB(110, 110, 125)
+		else
+			r.dn.TextColor3 = C.text
+			r.un.TextColor3 = C.dim
+		end
+	end
+	for uid, r in pairs(S.rows) do
+		if not alive[uid] then r.row:Destroy(); S.rows[uid] = nil end
+	end
+end
+
+local function updateESP()
+	for _, p in ipairs(Players:GetPlayers()) do
+		local c = p.Character
+		local head = c and c:FindFirstChild("Head")
+		if head then
+			local bb = head:FindFirstChild("FlickerBB")
+			if not bb then
+				bb = Instance.new("BillboardGui")
+				bb.Name = "FlickerBB"
+				bb.Size = UDim2.fromOffset(IS_MOBILE and 190 or 230, 42)
+				bb.StudsOffsetWorldSpace = Vector3.new(0, 2.7, 0)
+				bb.AlwaysOnTop = true
+				bb.MaxDistance = 500
+				bb.Parent = head
+				local l = Instance.new("TextLabel")
+				l.Name = "L"
+				l.Size = UDim2.fromScale(1, 1)
+				l.BackgroundTransparency = 1
+				l.Font = Enum.Font.GothamBold
+				l.TextSize = IS_MOBILE and 12 or 13
+				l.TextStrokeTransparency = 0.25
+				l.TextStrokeColor3 = Color3.new(0, 0, 0)
+				l.Text = ""
+				l.Parent = bb
+			end
+			local role = S.roles[p.UserId]
+			local txt = "@" .. p.Name
+			if role then txt = txt .. "\n" .. string.upper(role) end
+			bb.L.Text = txt
+			bb.L.TextColor3 = role and roleColor(role) or Color3.fromRGB(255, 236, 150)
+		end
+	end
+end
+
+local function updateHL()
+	for _, p in ipairs(Players:GetPlayers()) do
+		local c = p.Character
+		if c then
+			local role = S.roles[p.UserId]
+			local hl = c:FindFirstChild("FlickerHL")
+			if role and role ~= "innocent" then
+				if not hl then
+					hl = Instance.new("Highlight")
+					hl.Name = "FlickerHL"
+					hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+					hl.FillTransparency = 0.82
+					hl.OutlineTransparency = 0.1
+					hl.Parent = c
+				end
+				hl.FillColor = roleColor(role)
+				hl.OutlineColor = roleColor(role)
+			elseif hl then
+				hl:Destroy()
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- main loop
+------------------------------------------------------------------
+local acc, guiAcc = 0, 0
+RunService.Heartbeat:Connect(function(dt)
+	acc += dt
+	guiAcc += dt
+	if guiAcc >= 1.5 then
+		guiAcc = 0
+		pcall(scanGuiForReveals)
+	end
+	if acc < (IS_MOBILE and 0.7 or 0.5) then return end
+	acc = 0
+	pcall(update)
+	if ESP_ON then
+		pcall(updateESP)
+		pcall(updateHL)
+	end
+	if logDirty then logDirty = false; renderLog() end
+	local found = 0
+	for _ in pairs(S.roles) do found += 1 end
+	status.Text = string.format("%d players  |  %d roles  |  %d remotes",
+		#Players:GetPlayers(), found, S.remotes)
+end)
+
+------------------------------------------------------------------
+-- input  (tap + drag)
+------------------------------------------------------------------
+local function setOpen(v)
+	S.open = v
+	main.Visible = v
+end
+
+toggle.MouseButton1Click:Connect(function() setOpen(not S.open) end)
+closeBtn.MouseButton1Click:Connect(function() setOpen(false) end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.RightShift then
+		setOpen(not S.open)
+	end
+end)
+
+local dragging, dragStart, startPos
+local function isTouchLike(t)
+	return t == Enum.UserInputType.MouseButton1
+		or t == Enum.UserInputType.Touch
+end
+
+title.InputBegan:Connect(function(input)
+	if isTouchLike(input.UserInputType) then
+		dragging = true
+		dragStart = input.Position
+		startPos = main.Position
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if isTouchLike(input.UserInputType) then dragging = false end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale, startPos.X.Offset + d.X,
+			startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+
+------------------------------------------------------------------
+setOpen(true)
+pcall(update)
+print("[Flicker Reveal] loaded - tap FR to toggle")
